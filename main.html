@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>まゆキャッチゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            background: linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%);
+            font-family: 'Segoe UI', 'Meiryo', sans-serif;
+        }
+        canvas {
+            display: block;
+            margin: 40px auto 0 auto;
+            background: #fff;
+            border: 4px solid #3498db;
+            border-radius: 18px;
+            box-shadow: 0 8px 32px rgba(52,152,219,0.18);
+        }
+    </style>
+</head>
+<body>
+<canvas id="game" width="600" height="600"></canvas>
+<script>
+// キャンバスと描画コンテキストの取得
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// スコアとハイスコアの初期化
+let score = 0;
+let highScore = Number(localStorage.getItem('highScore')) || 0;
+let chain = 0;
+
+//残機
+let lives = 3;
+
+// 衝突判定を保持する変数
+let isColliding = false;
+
+// 的（プロデューサー）の情報
+const P = {
+    x: 180,      // X座標
+    y: 400,      // Y座標
+    w: 150,      // 幅
+    h: 150,      // 高さ
+    vy: 0,       // 落下速度
+    dx: 2,       // 移動速度
+    dir: 1,      // 移動方向（1:右, -1:左）
+    random_num: 0,  // ランダムな数値
+    pre_random_num: 0,  // 前のランダムな数値
+    falling: false // 落下中かどうか
+};
+
+// プレイヤー（まゆ）の情報
+const mayu = {
+    x: 230,      // X座標
+    y: 60,       // Y座標
+    w: 150,      // 幅
+    h: 150,      // 高さ
+    vy: 0,       // 落下速度
+    falling: false, // 落下中かどうか
+    visible: true   // 表示中かどうか
+};
+
+// 画像の読み込み
+const charImage = new Image();
+charImage.src = 'Producer.png';
+
+const mayuImage = new Image();
+mayuImage.src = 'mayu.png';
+
+// 効果音・bgmの読み込み
+const clicSound = new Audio('決定ボタンを押す39.mp3');//
+clicSound.volume = 0.5; // 音量調整
+const catchSound = new Audio('短い音-フワ.mp3');// まゆをキャッチした時の音
+catchSound.volume = 0.5; // 音量調整
+const missSound = new Audio('短い音-プイッ.mp3');// まゆを落とした時の音
+missSound.volume = 0.5; // 音量調整
+const bgm1 = new Audio('ready!.mp3');
+bgm1.volume = 0.5; // 音量調整
+
+// 背景を描画する関数
+function drawBackground() {
+    const skyHeight = canvas.height * 0.75;
+    const groundHeight = canvas.height * 0.25;
+
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, skyHeight);
+    skyGradient.addColorStop(0, "#b3e0ff");
+    skyGradient.addColorStop(1, "#e0eafc");
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(0, 0, canvas.width, skyHeight);
+
+    function drawCloud(x, y, scale) {
+        ctx.save();
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.ellipse(x, y, 40*scale, 20*scale, 0, 0, Math.PI*2);
+        ctx.ellipse(x+30*scale, y+10*scale, 30*scale, 15*scale, 0, 0, Math.PI*2);
+        ctx.ellipse(x-30*scale, y+10*scale, 30*scale, 15*scale, 0, 0, Math.PI*2);
+        ctx.ellipse(x, y+15*scale, 35*scale, 18*scale, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+    }
+    drawCloud(120, 80, 1);
+    drawCloud(400, 60, 0.8);
+    drawCloud(300, 150, 0.6);
+
+    const groundGradient = ctx.createLinearGradient(0, skyHeight, 0, canvas.height);
+    groundGradient.addColorStop(0, "#7ed957");
+    groundGradient.addColorStop(1, "#4caf50");
+    ctx.fillStyle = groundGradient;
+    ctx.fillRect(0, skyHeight, canvas.width, groundHeight);
+
+    for(let i=0; i<30; i++) {
+        let gx = Math.random() * canvas.width;
+        let gy = skyHeight + groundHeight * (0.7 + Math.random()*0.3);
+        ctx.save();
+        ctx.strokeStyle = "#388e3c";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(gx, gy);
+        ctx.quadraticCurveTo(gx-4, gy-18, gx, gy-24-Math.random()*10);
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+// 的（プロデューサー）を描画
+function drawChar() {
+    if (charImage.complete) {
+        const aspectRatio = charImage.width / charImage.height;
+        const scaledWidth = P.h * aspectRatio;
+        ctx.drawImage(charImage, P.x, P.y, scaledWidth, P.h);
+    }
+}
+
+// プレイヤー（まゆ）を描画
+function drawMayu() {
+    if (mayu.visible) {
+        if (mayuImage.complete) {
+            const aspectRatio = mayuImage.width / mayuImage.height;
+            const scaledWidth = mayu.h * aspectRatio;
+            ctx.drawImage(mayuImage, mayu.x, mayu.y, scaledWidth, mayu.h);
+        }
+    }
+}
+
+// スコアとチェインを描画
+function drawScore() {
+    ctx.save();
+    ctx.font = 'bold 22px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#3498db';
+    ctx.textAlign = 'left';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 2;
+    ctx.fillText('スコア: ' + score, 16, 36);
+    ctx.fillStyle = '#e74c3c';
+    ctx.fillText('チェイン: ' + chain, 16, 66);
+    ctx.restore();
+}
+
+// 残機を描画する関数
+function drawLives() {
+    ctx.save();
+    ctx.font = 'bold 22px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#e74c3c';
+    ctx.textAlign = 'right';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 2;
+    ctx.fillText('残機: ' + lives, canvas.width - 16, 36);
+    ctx.restore();
+}
+
+// 的（プロデューサー）の位置を更新
+function updateChar() {
+    if (!P.falling) {
+        if (P.x <= 0 ){
+            P.x += 4; //画面から飛び出した時にスタックしないように戻す            
+        } else if ( P.x + P.w >= canvas.width){
+            P.x -= 4; //画面から飛び出した時にスタックしないように戻す  
+        }
+        if (chain <= 2) {
+            P.x += (2 + chain * 2 ) * P.dir; // スコアに応じて移動速度を増加
+        } else if (chain > 2) {
+            P.random_num = Math.random() * 80 - 40; // -50から50の間のランダムな数値
+            P.x += (P.random_num*0.1 + P.pre_random_num*0.9) * P.dir;
+            P.pre_random_num = (P.random_num*0.1 + P.pre_random_num*0.9);
+        }
+        if (P.x <= 0 || P.x + P.w >= canvas.width) {
+            P.dir *= -1;
+        }
+    } else {
+        // 落下中は下に移動
+        P.vy += 0.5; // 重力
+        P.y += P.vy;
+    }
+}
+
+// プレイヤー（まゆ）の位置・状態を更新
+function updateMayu() {
+    if (isColliding) {
+        // 衝突中はプロデューサーと一緒に落下
+        mayu.y = P.y-30;
+    } else if (mayu.falling && mayu.visible) {
+        mayu.vy += 0.5; // 重力
+        mayu.y += mayu.vy;
+        // 的（プロデューサー）と衝突判定
+        if (
+            mayu.y + mayu.h >= P.y +P.h/2 &&
+            mayu.x < P.x + P.w -30 &&
+            mayu.x + mayu.w > P.x +30
+        ) {
+            isColliding = true;
+            mayu.vy = 0; // 落下速度を0に
+            score +=chain * 100 + 100; // スコアを更新
+            chain++;
+
+            catchSound.play();
+            spawnHearts(); // ★ここでハートを生成
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('highScore', highScore);
+            }
+            P.falling = true;
+            setTimeout(reset, 800);
+        } else if (mayu.y + mayu.h > canvas.height) {
+            mayu.visible = false;
+            chain = 0;
+            lives--; // 残機を1減らす
+            missSound.play();
+            setTimeout(resetMayu, 800);
+        }
+    }
+}
+
+// ゲーム全体をリセット
+function reset() {
+    mayu.x = 230;
+    mayu.y = 60;
+    mayu.vy = 0;
+    mayu.falling = false;
+    mayu.visible = true;
+    P.x = 180;
+    P.y = 400;
+    P.vy = 0;
+    P.falling = false;
+    isColliding = false;
+}
+
+// プレイヤー（まゆ）だけリセット（失敗時）
+function resetMayu() {
+    mayu.x = 230;
+    mayu.y = 60;
+    mayu.vy = 0;
+    mayu.falling = false;
+    mayu.visible = true;
+    isColliding = false;
+}
+
+// ハートエフェクト用
+const hearts = [];
+const HEART_COUNT = 5;
+const HEART_SIZE = 48;
+const HEART_IMAGE = new Image();
+HEART_IMAGE.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><path d="M16 29s-13-8.35-13-17A7 7 0 0 1 16 5a7 7 0 0 1 13 7c0 8.65-13 17-13 17z" fill="%23e74c3c"/></svg>';
+
+// ハートを生成する関数
+// まゆがキャッチされた時に呼ばれる
+function spawnHearts() {
+    hearts.length = 0;
+    const baseX = canvas.width / 2;
+    const baseY = canvas.height - 70;
+    for (let i = 0; i < HEART_COUNT; i++) {
+        const angle = Math.PI / 2 + (Math.random() - 0.5) * Math.PI / 3; // 斜め上方向ランダム
+        const speed = 7 + Math.random() * 2;
+        hearts.push({
+            x: baseX,
+            y: baseY,
+            vx: Math.cos(angle) * speed,
+            vy: -Math.sin(angle) * speed,
+            ay: 0.25,
+            life: 0
+        });
+    }
+    setTimeout(() => hearts.length = 0, 1000);
+}
+
+// ハートの位置と速度を更新
+function updateHearts() {
+    for (const heart of hearts) {
+        heart.x += heart.vx;
+        heart.y += heart.vy;
+        heart.vy += heart.ay;
+        heart.life += 16; // だいたい1フレーム
+    }
+}
+
+// ハートを描画
+function drawHearts() {
+    for (const heart of hearts) {
+        if (HEART_IMAGE.complete) {
+            ctx.save();
+            ctx.globalAlpha = 1 - heart.life / 1000;
+            ctx.drawImage(HEART_IMAGE, heart.x - HEART_SIZE/2, heart.y - HEART_SIZE/2, HEART_SIZE, HEART_SIZE);
+            ctx.restore();
+        }
+    }
+}
+
+let gameState = 'title'; // 'title' or 'playing' or 'result'
+
+// タイトル画面を描画
+function drawTitleScreen() {
+    // 背景
+    drawBackground();
+
+    // タイトル文字
+    ctx.save();
+    ctx.font = 'bold 44px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#e75480';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 6;
+    ctx.fillText('まゆを受け止めて', canvas.width / 2, 120);
+    ctx.restore();
+
+    // まゆ画像
+    if (mayuImage.complete) {
+        const aspectRatio = mayuImage.width / mayuImage.height;
+        const scaledWidth = 120 * aspectRatio;
+        ctx.drawImage(mayuImage, canvas.width / 2 - 160, 220, scaledWidth, 120);
+    }
+
+    // プロデューサー画像
+    if (charImage.complete) {
+        const aspectRatio = charImage.width / charImage.height;
+        const scaledWidth = 120 * aspectRatio;
+        ctx.drawImage(charImage, canvas.width / 2 + 40, 340, scaledWidth, 120);
+    }
+
+    // スタート案内
+    ctx.save();
+    ctx.font = 'bold 24px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#3498db';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 2;
+    ctx.fillText('クリックでスタート', canvas.width / 2, 520);
+    ctx.restore();
+
+    ctx.font = 'bold 24px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#e67e22';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 2;
+    ctx.fillText('最高スコア: ' + highScore, canvas.width / 2, 560);
+
+}
+
+// ゲームプレイ画面を描画
+function drawPlayScreen() {
+    drawBackground();
+    drawScore();
+    drawLives();
+    updateChar();
+    updateMayu();
+    updateHearts();
+    drawChar();
+    drawMayu();
+    drawHearts();
+
+    // BGMをループ再生
+    if (bgm1.paused) {
+        bgm1.loop = true;
+        bgm1.play();
+    }
+}
+
+//リザルト画面
+function drawResultScreen() {
+    // 背景
+    drawBackground();
+
+    // スコア表示
+    ctx.save();
+    ctx.font = 'bold 32px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#3498db';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 4;
+    ctx.fillText('スコア: ' + score, canvas.width / 2, 78);
+    ctx.restore();
+
+    // ハイスコア表示
+    ctx.save();
+    ctx.font = 'bold 32px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#e67e22';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 4;
+    ctx.fillText('最高スコア: ' + highScore, canvas.width / 2, 120);
+    ctx.restore();
+
+    // リトライボタン
+    ctx.save();
+    ctx.font = 'bold 28px Segoe UI, Meiryo, sans-serif';
+    ctx.fillStyle = '#3498db';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 2;
+    ctx.fillRect(canvas.width / 2 - 90, 220, 180, 60);
+    ctx.fillStyle = '#fff';
+    ctx.fillText('リトライ', canvas.width / 2, 260);
+    ctx.restore();
+
+    // まゆがプロデューサーに衝突した画像
+    if (mayuImage.complete && charImage.complete) {
+        const aspectRatioMayu = mayuImage.width / mayuImage.height;
+        const aspectRatioChar = charImage.width / charImage.height;
+        const mayuW = 100 * aspectRatioMayu;
+        const mayuH = 100;
+        const charW = 100 * aspectRatioChar;
+        const charH = 100;
+        const baseX = canvas.width / 2 - 70;
+        const baseY = 350;
+        ctx.drawImage(charImage, baseX + 60, baseY, charW, charH);
+        ctx.drawImage(mayuImage, baseX, baseY - 30, mayuW, mayuH);
+    }
+}
+
+// メインループ
+function loop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (gameState === 'title') {
+        drawTitleScreen();
+    } else if (gameState === 'result') {
+        drawResultScreen();
+    } else {
+        drawPlayScreen();
+
+        // 残機が0になったらリザルト画面へ
+        if (lives <= 0) {
+            gameState = 'result';
+        }
+    }
+    requestAnimationFrame(loop);
+}
+
+// キャンバスのクリックイベントハンドラ
+function handleCanvasClick(e) {
+    if (gameState === 'title') {
+        gameState = 'playing';
+        clicSound.play();
+        reset();
+    } else if (gameState === 'playing') {
+        if (!mayu.falling && mayu.visible) {
+            mayu.falling = true;
+            mayu.y = 60;
+            mayu.vy = 0;
+        } else if (!mayu.visible) {
+            resetMayu();
+            mayu.falling = true;
+        }
+    } else if (gameState === 'result') {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        if (mx >= canvas.width / 2 - 90 && mx <= canvas.width / 2 + 90 &&
+            my >= 220 && my <= 280) {
+            gameState = 'playing';
+            lives = 3;
+            score = 0;
+            reset();
+        }
+    }
+}
+
+canvas.addEventListener('click', handleCanvasClick);
+
+// ゲーム開始
+loop();
+</script>
+</body>
+</html>
